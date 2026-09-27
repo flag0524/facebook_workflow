@@ -1,6 +1,10 @@
 name: Publish reviewed Facebook Page cycle
 
 on:
+  # 새 계획을 main에 push하면 검수 없이 바로 예약 등록한다
+  push:
+    branches: [main]
+    paths: [content_plan.json]
   workflow_dispatch:
     inputs:
       cycle:
@@ -66,14 +70,18 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          args=(--cycle "${{ inputs.cycle }}" --video-state "${{ inputs.video_state }}")
+          cycle="${{ inputs.cycle }}"
+          if [ -z "$cycle" ]; then
+            cycle=$(python -c "import json; print(json.load(open('content_plan.json', encoding='utf-8'))['cycle'])")
+          fi
+          args=(--cycle "$cycle" --video-state "${{ inputs.video_state || 'SCHEDULED' }}")
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             args+=(--dry-run)
           fi
           python publish.py "${args[@]}"
 
       - name: Save completed publishing state
-        if: ${{ always() && inputs.dry_run == false }}
+        if: ${{ always() && (github.event_name == 'push' || inputs.dry_run == false) }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
