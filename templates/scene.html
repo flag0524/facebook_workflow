@@ -1,12 +1,24 @@
-<!-- 릴스 장면 한 컷을 1080x1920으로 그리는 템플릿 -->
+<!-- 릴스 장면 한 컷을 1080x1920으로 그리는 템플릿.
+     __BG_IMAGE__에 data URI가 들어오면 AI 생성 이미지를 전체 장면 공통 배경으로 쓴다.
+     __ZOOM__은 장면마다 약간씩 다른 배율로 무믰움을 줄여 정지화면 느낌을 피한다. -->
 <meta charset="utf-8">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { width: 1080px; height: 1920px; overflow: hidden;
+  html, body { width: 1080px; height: 1920px; overflow: hidden;
          font-family: "Pretendard", "Malgun Gothic", sans-serif;
          background: #0B1220; color: #F8FAFC; }
-  .scene { width: 100%; height: 100%; padding: 140px 96px;
+  .frame { position: relative; width: 1080px; height: 1920px; }
+  .bg { position: absolute; inset: -30px; background-size: cover; background-position: center;
+        transform: scale(__ZOOM__); }
+  .scrim { position: absolute; inset: 0;
+           background: linear-gradient(180deg, rgba(11,18,32,0.35) 0%, rgba(11,18,32,0.55) 45%, rgba(11,18,32,0.88) 100%); }
+  .scene { position: relative; width: 100%; height: 100%; padding: 140px 96px;
            display: flex; align-items: center; justify-content: center; text-align: center; }
-  p { font-size: 84px; line-height: 1.34; font-weight: 700; letter-spacing: -0.02em; }
+  p { font-size: 84px; line-height: 1.34; font-weight: 700; letter-spacing: -0.02em;
+      text-shadow: 0 4px 24px rgba(0,0,0,0.45); }
 </style>
-<div class="scene"><p>__TEXT__</p></div>
+<div class="frame">
+  <div class="bg" style="background-image: __BG_IMAGE__;"></div>
+  <div class="scrim"></div>
+  <div class="scene"><p>__TEXT__</p></div>
+</div>

@@ -83,7 +83,7 @@ def _pick_bgm():
     return files[0] if files else None
 
 
-REEL_MIN_SEC, REEL_MAX_SEC = 20, 50
+REEL_MIN_SEC, REEL_MAX_SEC = 20, 60
 
 
 def _publish_reel(item, when, dry_run, video_state="SCHEDULED"):
@@ -93,7 +93,8 @@ def _publish_reel(item, when, dry_run, video_state="SCHEDULED"):
             f"릴스 길이가 {total}초다. {REEL_MIN_SEC}~{REEL_MAX_SEC}초로 맞춰라"
         )
     mp4 = OUT / f"{item['id']}.mp4"
-    render.render_reel(item["scenes"], mp4, bgm=_pick_bgm())
+    bg_image = item.get("visual", {}).get("image_path")
+    render.render_reel(item["scenes"], mp4, bgm=_pick_bgm(), bg_image=bg_image)
     if dry_run:
         log(f"  [dry-run] 릴스 업로드 + 예약 등록 생략 ({mp4.name})")
         return None

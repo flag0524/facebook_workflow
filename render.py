@@ -1,5 +1,7 @@
 # 콘텐츠 계획 항목을 PNG나 MP4로 뽑는 렌더러. 페이스북 API를 알지 못한다
+import base64
 import html
+import mimetypes
 import subprocess
 import tempfile
 from pathlib import Path
@@ -27,13 +29,28 @@ def _shoot(html_text, out_path, width, height):
     return out_path
 
 
+def _image_data_uri(image_path):
+    """로컬 이미지 파일을 base64 data URI로 인라인한다. HTML 문자열 하나로 자급자족하기 위해서다."""
+    if not image_path:
+        return None
+    image_path = Path(image_path)
+    mime = mimetypes.guess_type(image_path.name)[0] or "image/png"
+    data = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{data}"
+
+
 def _build_card_html(card):
-    """카드를 HTML 문자열로 렌더링한다. 이스케이핑을 포함하지만 브라우저를 쓰지 않는다."""
+    """카드를 HTML 문자열로 렌더링한다. 이스케이핑을 포함하지만 브라우저를 쓰지 않는다.
+    card에 image(로컬 경로)가 있으면 AI 생성 이미지를 배경으로 깔고, 없으면 단색 배경으로 대체한다."""
     tpl = (TEMPLATES / "card.html").read_text(encoding="utf-8")
     body = "".join(f"<li>{html.escape(line)}</li>" for line in card["body"])
+    headline = html.escape(card["headline"]).replace("\n", "<br>")
+    uri = _image_data_uri(card.get("image"))
     filled = (
         tpl.replace("__TEMPLATE__", str(card.get("template", 1)))
-        .replace("__HEADLINE__", html.escape(card["headline"]))
+        .replace("__NOIMAGE_CLASS__", "" if uri else "no-image")
+        .replace("__BG_IMAGE__", f'url("{uri}")' if uri else "none")
+        .replace("__HEADLINE__", headline)
         .replace("__BODY__", body)
     )
     return filled
@@ -45,19 +62,27 @@ def render_card(card, out_path):
     return _shoot(filled, Path(out_path), IMG_W, IMG_H)
 
 
-def render_reel(scenes, out_path, bgm=None):
-    """장면 목록을 PNG로 찍고 ffmpeg로 이어붙여 MP4를 만든다."""
+def render_reel(scenes, out_path, bgm=None, bg_image=None):
+    """장면 목록을 PNG로 찍고 ffmpeg로 이어붙여 MP4를 만든다.
+    bg_image(로컬 경로)가 있으면 AI 생성 이미지 한 장을 전 장면 공통 배경으로 쓰고,
+    장면마다 살짝 다른 확대 비율을 줘서 정지화면이 이어붙는 밋밋함을 줄인다."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tpl = (TEMPLATES / "scene.html").read_text(encoding="utf-8")
+    uri = _image_data_uri(bg_image)
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         lines = []
         for idx, scene in enumerate(scenes):
             png = tmp / f"{idx:02d}.png"
-            _shoot(tpl.replace("__TEXT__", html.escape(scene["text"])),
-                   png, VID_W, VID_H)
+            zoom = 1.04 + 0.025 * (idx % 4)
+            filled = (
+                tpl.replace("__BG_IMAGE__", f'url("{uri}")' if uri else "none")
+                .replace("__ZOOM__", f"{zoom:.3f}")
+                .replace("__TEXT__", html.escape(scene["text"]).replace("\n", "<br>"))
+            )
+            _shoot(filled, png, VID_W, VID_H)
             lines.append(f"file '{png.as_posix()}'")
             lines.append(f"duration {scene['sec']}")
         # ffmpeg 8은 마지막 duration을 존중한다. 옛 버전 우회로 마지막 파일을 반복하면
