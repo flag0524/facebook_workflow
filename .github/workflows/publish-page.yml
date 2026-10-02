@@ -5,11 +5,20 @@ on:
   push:
     branches: [main]
     paths: [content_plan.json]
+  # 매일 06:00 KST(21:00 UTC): 콘텐츠 뱅크(plans/*.json)에서 예약 창(28일) 안에
+  # 새로 들어온 건만 예약 등록한다. 이미 등록된 건은 state.json으로 건너뛴다
+  schedule:
+    - cron: "0 21 * * *"
   workflow_dispatch:
     inputs:
       cycle:
-        description: "Reviewed content cycle, for example 2026-10A"
+        description: "Reviewed content cycle, for example 2026-10A or VIBE-2026-10"
         required: true
+        type: string
+      plan:
+        description: "Plan file, for example content_plan.json or plans/vibe_coding.json"
+        required: true
+        default: content_plan.json
         type: string
       dry_run:
         description: "Render only. No Facebook API calls are made."
@@ -70,18 +79,35 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          cycle="${{ inputs.cycle }}"
-          if [ -z "$cycle" ]; then
-            cycle=$(python -c "import json; print(json.load(open('content_plan.json', encoding='utf-8'))['cycle'])")
-          fi
-          args=(--cycle "$cycle" --video-state "${{ inputs.video_state || 'SCHEDULED' }}")
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            args+=(--dry-run)
-          fi
-          python publish.py "${args[@]}"
+          shopt -s nullglob
+          case "${{ github.event_name }}" in
+            workflow_dispatch) plans=("${{ inputs.plan }}") ;;
+            push) plans=(content_plan.json) ;;
+            *) plans=(content_plan.json plans/*.json) ;;
+          esac
+          status=0
+          for plan in "${plans[@]}"; do
+            if [ ! -f "$plan" ]; then
+              echo "::error::계획 파일이 없다: $plan"
+              status=1
+              continue
+            fi
+            cycle=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['cycle'])" "$plan")
+            if [ -n "${{ inputs.cycle }}" ]; then
+              cycle="${{ inputs.cycle }}"
+            fi
+            args=(--plan "$plan" --cycle "$cycle" --video-state "${{ inputs.video_state || 'SCHEDULED' }}")
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              args+=(--dry-run)
+            fi
+            echo "::group::$plan ($cycle)"
+            python publish.py "${args[@]}" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
 
       - name: Save completed publishing state
-        if: ${{ always() && (github.event_name == 'push' || inputs.dry_run == false) }}
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -90,5 +116,6 @@ jobs:
             echo "No state changes to save."
           else
             git commit -m "chore: save Facebook publishing state"
+            git pull --rebase
             git push
           fi
