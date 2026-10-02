@@ -1,4 +1,5 @@
-# 사이클 계획을 읽어 건별로 렌더링하고 페이스북 예약 게시로 등록하는 엔트리포인트
+# 사이클 계획을 읽어 건별로 렌더링하고 페이스북 예약 게시로 등록하는 엔트리포인트.
+# 매일 cron으로 돌리면 예약 창(28일) 안에 새로 들어온 건만 등록하는 롤링 방식이 된다
 import argparse
 import datetime as dt
 import json
@@ -22,6 +23,11 @@ LOG = ROOT / "publish.log"
 load_dotenv(ROOT / ".env")
 
 KST = dt.timezone(dt.timedelta(hours=9))
+
+# 페이스북 예약은 지금부터 약 29일 이내만 받는다. 매일 cron이 돌면서 창 안에 들어온 건만
+# 등록하므로 여유를 두고 28일로 자른다. 너무 임박한 건(10분 이내)은 API가 거부한다.
+WINDOW_MIN_MINUTES = 10
+WINDOW_MAX_DAYS = 28
 
 
 def log(msg):
@@ -101,14 +107,36 @@ def _publish_reel(item, when, dry_run, video_state="SCHEDULED"):
     return fb.schedule_reel(mp4, item["message"], when, video_state=video_state)
 
 
-def run(plan_data, dry_run=False, video_state="SCHEDULED"):
-    """계획의 모든 항목을 처리하고 (성공, 실패) 건수를 돌려준다."""
+def warn(msg):
+    """GitHub Actions 화면에 경고 배지로 남기고 텔레그램에도 보낸다."""
+    if os.getenv("GITHUB_ACTIONS"):
+        print(f"::warning::{msg}", flush=True)
+    log(f"경고: {msg}")
+    notify(msg)
+
+
+def bank_days_left(plan_data, now):
+    """계획(콘텐츠 뱅크)의 마지막 예약일까지 남은 일수. 항목이 없으면 0."""
+    times = [dt.datetime.fromisoformat(i["publish_at"]) for i in plan_data["items"]]
+    if not times:
+        return 0
+    return (max(times) - now).total_seconds() / 86400
+
+
+def run(plan_data, dry_run=False, video_state="SCHEDULED", now=None):
+    """계획의 항목 중 예약 창(지금+10분 ~ 지금+28일) 안에 있는 미등록 건만 처리하고
+    (성공, 실패) 건수를 돌려준다. 이미 지난 건은 실패가 아니라 건너뛰고,
+    창보다 먼 건은 다음 실행(매일 cron)으로 미룬다."""
+    now = now or dt.datetime.now(KST)
+    floor = now + dt.timedelta(minutes=WINDOW_MIN_MINUTES)
+    ceil = now + dt.timedelta(days=WINDOW_MAX_DAYS)
     ids = [item["id"] for item in plan_data["items"]]
     dupes = [i for i in ids if ids.count(i) > 1]
     assert not dupes, f"content_plan.json에 중복 id가 있다: {sorted(set(dupes))}"
 
     state = load_state()
     ok = fail = 0
+    missed, deferred = [], 0
 
     for item in plan_data["items"]:
         item_id = item["id"]
@@ -120,6 +148,13 @@ def run(plan_data, dry_run=False, video_state="SCHEDULED"):
             if not item.get("message"):
                 raise ValueError("message가 비어있다. 원고를 채워라")
             when = dt.datetime.fromisoformat(item["publish_at"])
+            if when <= floor:
+                log(f"{item_id} 건너뜀 (예약 시각 {item['publish_at']}이 이미 지남)")
+                missed.append(item_id)
+                continue
+            if when > ceil:
+                deferred += 1
+                continue
 
             if item["kind"] == "image":
                 post_id = _publish_image(item, when, dry_run)
@@ -141,6 +176,10 @@ def run(plan_data, dry_run=False, video_state="SCHEDULED"):
             log(f"{item_id} 실패: {e}")
             fail += 1
 
+    if deferred:
+        log(f"예약 창 밖 {deferred}건은 다음 실행에서 등록한다")
+    if missed:
+        warn(f"{plan_data.get('cycle')}: 등록되지 못하고 시각이 지난 항목 {len(missed)}건 {missed}")
     return ok, fail
 
 
@@ -148,6 +187,11 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")  # ponytail: Windows cp949 콘솔이 em dash 등을 못 찍고 죽는 문제 회피
     ap = argparse.ArgumentParser()
     ap.add_argument("--cycle", required=True)
+    ap.add_argument(
+        "--plan",
+        default=str(PLAN),
+        help="계획 파일 경로. 기본은 content_plan.json, 콘텐츠 뱅크는 plans/*.json",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
         "--video-state",
@@ -157,10 +201,11 @@ def main():
     )
     args = ap.parse_args()
 
-    plan_data = json.loads(PLAN.read_text(encoding="utf-8"))
+    plan_path = Path(args.plan)
+    plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
     if plan_data["cycle"] != args.cycle:
         raise SystemExit(
-            f"content_plan.json은 {plan_data['cycle']} 사이클이다. --cycle과 다르다"
+            f"{plan_path.name}은 {plan_data['cycle']} 사이클이다. --cycle과 다르다"
         )
 
     if not args.dry_run:
@@ -169,6 +214,16 @@ def main():
     ok, fail = run(plan_data, dry_run=args.dry_run, video_state=args.video_state)
     summary = f"{args.cycle} 완료 — {ok}건 성공 / {fail}건 실패"
     log(summary)
+
+    # 콘텐츠 뱅크(warn_days_left가 있는 계획)는 원고가 바닥나기 전에 미리 알린다
+    warn_days = plan_data.get("warn_days_left")
+    if warn_days:
+        left = bank_days_left(plan_data, dt.datetime.now(KST))
+        if left < warn_days:
+            warn(
+                f"{args.cycle} 콘텐츠 뱅크 원고가 {max(left, 0):.0f}일치만 남았다. "
+                f"{plan_path.name}에 다음 원고를 추가해라"
+            )
     if fail and not args.dry_run:
         notify(summary + "\n실패한 건은 같은 명령을 다시 돌리면 재시도된다")
     if fail:
