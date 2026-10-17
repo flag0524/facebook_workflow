@@ -56,7 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 계획 JSON의 형태는 `{"cycle": ..., "items": [...]}`다.
 - 각 항목에는 `id`, `kind`(`image`|`reel`), `publish_at`(KST ISO), `message`가 있다.
 - 이미지 항목은 `card`를, 릴스 항목은 `scenes[{text, sec}]`를 가진다. 릴스 총 길이는 20~60초여야 한다.
-- 배경 이미지는 선택 사항이고 `visual.image_path`에 넣는다.
+- 배경 이미지는 선택 사항이다. 릴스는 `visual.image_path`에, 이미지 카드는 `card.image`에 넣는다.
 - `plans/*.json`처럼 `warn_days_left`가 있는 계획은 "콘텐츠 뱅크"다. 원고가 그 일수 아래로 남으면 경고를 낸다. 뱅크는 항목을 이어 붙이는 식으로 운영한다.
 - 원고(`message`, `scenes`)는 LLM API로 만들지 않는다. Claude Code 세션에서 직접 쓴다.
 
@@ -70,4 +70,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - 토큰은 비밀번호 변경이나 로그아웃(오류 코드 190, subcode 460/467)으로 무효화된다.
   - 운영 토큰은 GitHub Secrets에 있다. 로컬 `.env`의 토큰과 같지 않을 수 있다.
 - 실행 로그는 `publish.log`에 남는다(gitignore 대상). Windows 콘솔(cp949)에서 깨지지 않도록 `main()`이 stdout을 UTF-8로 다시 설정한다.
-- 설계 배경은 `context-notes.md`와 `docs/superpowers/specs/`에 있다. 토큰 발급 절차는 설계 문서 7절에 있다.
+- 설계 배경은 `context-notes.md`에 있다. 토큰 발급 절차와 문제 해결 표는 `README.md`에 있다.
